@@ -1,13 +1,32 @@
-FROM python:3.12-slim
+import os
+from flask import Flask, jsonify
+from flask_cors import CORS
 
-WORKDIR /app
+app = Flask(__name__)
+CORS(app)
 
-COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+@app.route("/")
+def home():
+    return jsonify({
+        "status": "online",
+        "message": "GameZone backend работает!"
+    })
 
-COPY . .
 
-ENV PYTHONUNBUFFERED=1
+@app.route("/api/status")
+def status():
+    return jsonify({
+        "status": "online"
+    })
 
-CMD ["python", "backend/server.py"]
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )
+  
