@@ -1,0 +1,154 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import json
+import os
+from datetime import datetime
+
+app = Flask(__name__)
+CORS(app)
+
+DATA_FILE = "data.json"
+
+
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {
+            "players": [],
+            "scores": []
+        }
+
+    with open(DATA_FILE, "r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+
+
+# Проверка сервера
+@app.route("/api/status", methods=["GET"])
+def status():
+    return jsonify({
+        "status": "online",
+        "server": "GameZone Python Backend"
+    })
+
+
+# Получить всех игроков
+@app.route("/api/players", methods=["GET"])
+def get_players():
+    data = load_data()
+    return jsonify(data["players"])
+
+
+# Создать игрока
+@app.route("/api/players", methods=["POST"])
+def create_player():
+    data = load_data()
+    body = request.get_json()
+
+    username = body.get("username")
+
+    if not username:
+        return jsonify({
+            "error": "Введите имя игрока"
+        }), 400
+
+    # Проверяем, существует ли игрок
+    for player in data["players"]:
+        if player["username"].lower() == username.lower():
+            return jsonify(player)
+
+    player = {
+        "id": len(data["players"]) + 1,
+        "username": username,
+        "created_at": datetime.now().isoformat()
+    }
+
+    data["players"].append(player)
+    save_data(data)
+
+    return jsonify(player), 201
+
+
+# Сохранить результат игры
+@app.route("/api/scores", methods=["POST"])
+def add_score():
+    data = load_data()
+    body = request.get_json()
+
+    username = body.get("username")
+    game = body.get("game")
+    score = body.get("score")
+
+    if not username or not game or score is None:
+        return jsonify({
+            "error": "Нужно указать username, game и score"
+        }), 400
+
+    try:
+        score = float(score)
+    except:
+        return jsonify({
+            "error": "Счёт должен быть числом"
+        }), 400
+
+    result = {
+        "username": username,
+        "game": game,
+        "score": score,
+        "date": datetime.now().isoformat()
+    }
+
+    data["scores"].append(result)
+    save_data(data)
+
+    return jsonify({
+        "success": True,
+        "result": result
+    }), 201
+
+
+# Таблица лидеров конкретной игры
+@app.route("/api/leaderboard/<game>", methods=["GET"])
+def leaderboard_game(game):
+    data = load_data()
+
+    scores = [
+        score for score in data["scores"]
+        if score["game"].lower() == game.lower()
+    ]
+
+    scores.sort(
+        key=lambda x: x["score"],
+        reverse=True
+    )
+
+    return jsonify(scores[:20])
+
+
+# Общая таблица лидеров
+@app.route("/api/leaderboard", methods=["GET"])
+def leaderboard():
+    data = load_data()
+
+    scores = data["scores"]
+
+    scores.sort(
+        key=lambda x: x["score"],
+        reverse=True
+    )
+
+    return jsonify(scores[:50])
+
+
+if __name__ == "__main__":
+    print("🎮 GameZone backend запущен!")
+    print("🌐 http://127.0.0.1:5000")
+
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=True
+    )
