@@ -1,280 +1,268 @@
-import os
-import json
-from datetime import datetime
-
 from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
+import sqlite3
+from pathlib import Path
 
+# Папка, где находится server.py
+BASE_DIR = Path(__file__).resolve().parent
 
-app = Flask(__name__)
-CORS(app)
+# Файл базы данных
+DB_PATH = BASE_DIR / "gamezone.db"
 
-# Папка проекта
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Файл с данными
-DATA_FILE = os.path.join(BASE_DIR, "data.json")
+app = Flask(__name__, static_folder=None)
 
 
 # =========================
-# Работа с данными
+# БАЗА ДАННЫХ
 # =========================
 
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        data = {
-            "players": [],
-            "scores": []
-        }
-        save_data(data)
-        return data
-
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as file:
-            return json.load(file)
-    except (json.JSONDecodeError, OSError):
-        return {
-            "players": [],
-            "scores": []
-        }
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as file:
-        json.dump(
-            data,
-            file,
-            ensure_ascii=False,
-            indent=2
+def init_db():
+    conn = get_db()
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            game TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+    """)
+
+    conn.commit()
+    conn.close()
 
 
 # =========================
-# Главная страница GameZone
+# ГЛАВНАЯ СТРАНИЦА
 # =========================
 
 @app.route("/")
-def home():
-    return send_from_directory(BASE_DIR, "index.html")
+def index():
+    return send_from_directory(
+        BASE_DIR,
+        "index.html"
+    )
 
 
 # =========================
-# Проверка сервера
+# ТАБЛИЦА ЛИДЕРОВ
 # =========================
 
-@app.route("/api/status")
-def status():
-    return jsonify({
-        "status": "online",
-        "message": "GameZone backend работает!",
-        "time": datetime.now().isoformat()
-    })
+@app.route("/api/leaderboard", methods=["GET"])
+def leaderboard():
 
+    conn = get_db()
 
-# =========================
-# Игроки
-# =========================
+    rows = conn.execute("""
+        SELECT
+            name,
+            game,
+            MAX(score) AS score
+        FROM scores
+        GROUP BY name, game
+        ORDER BY score DESC
+        LIMIT 50
+    """).fetchall()
 
-@app.route("/api/players", methods=["GET"])
-def get_players():
-    data = load_data()
+    conn.close()
 
-    return jsonify(data["players"])
+    result = []
 
+    for row in rows:
 
-@app.route("/api/players", methods=["POST"])
-def create_player():
-    data = load_data()
+        result.append({
+            "name": row["name"],
+            "game": row["game"],
+            "score": row["score"]
+        })
 
-    body = request.get_json(silent=True) or {}
-
-    username = str(body.get("username", "")).strip()
-
-    if not username:
-        return jsonify({
-            "success": False,
-            "error": "Введите имя игрока"
-        }), 400
-
-    if len(username) > 30:
-        return jsonify({
-            "success": False,
-            "error": "Имя слишком длинное"
-        }), 400
-
-    # Проверяем существующего игрока
-    for player in data["players"]:
-        if player["username"].lower() == username.lower():
-            return jsonify({
-                "success": True,
-                "player": player,
-                "existing": True
-            })
-
-    player = {
-        "id": len(data["players"]) + 1,
-        "username": username,
-        "created_at": datetime.now().isoformat()
-    }
-
-    data["players"].append(player)
-    save_data(data)
-
-    return jsonify({
-        "success": True,
-        "player": player,
-        "existing": False
-    }), 201
+    return jsonify(result)
 
 
 # =========================
-# Результаты игр
+# СОХРАНЕНИЕ РЕКОРДА
 # =========================
 
-@app.route("/api/scores", methods=["POST"])
+@app.route("/api/score", methods=["POST"])
 def add_score():
-    data = load_data()
 
-    body = request.get_json(silent=True) or {}
+    data = request.get_json(
+        silent=True
+    ) or {}
 
-    username = str(body.get("username", "")).strip()
-    game = str(body.get("game", "")).strip()
+    name = str(
+        data.get(
+            "name",
+            "Игрок"
+        )
+    ).strip()[:20]
 
-    if not username:
-        return jsonify({
-            "success": False,
-            "error": "Не указано имя игрока"
-        }), 400
+    game = str(
+        data.get(
+            "game",
+            "Игра"
+        )
+    ).strip()[:30]
 
-    if not game:
-        return jsonify({
-            "success": False,
-            "error": "Не указана игра"
-        }), 400
 
     try:
-        score = float(body.get("score", 0))
-    except (TypeError, ValueError):
+
+        score = int(
+            data.get(
+                "score",
+                0
+            )
+        )
+
+    except (
+        TypeError,
+        ValueError
+    ):
+
         return jsonify({
-            "success": False,
-            "error": "Счёт должен быть числом"
+            "error":
+            "score должен быть числом"
         }), 400
+
+
+    if not name:
+
+        name = "Игрок"
+
 
     if score < 0:
+
         return jsonify({
-            "success": False,
-            "error": "Счёт не может быть отрицательным"
+            "error":
+            "Счёт не может быть отрицательным"
         }), 400
 
-    result = {
-        "id": len(data["scores"]) + 1,
-        "username": username,
-        "game": game,
-        "score": score,
-        "date": datetime.now().isoformat()
-    }
 
-    data["scores"].append(result)
-    save_data(data)
-
-    return jsonify({
-        "success": True,
-        "result": result
-    }), 201
-
-
-# =========================
-# Все результаты
-# =========================
-
-@app.route("/api/scores", methods=["GET"])
-def get_scores():
-    data = load_data()
-
-    scores = data["scores"]
-
-    # Новые результаты сверху
-    scores = sorted(
-        scores,
-        key=lambda x: x.get("date", ""),
-        reverse=True
+    # Защита от случайно огромного значения
+    score = min(
+        score,
+        10_000_000
     )
 
-    return jsonify(scores)
+
+    conn = get_db()
 
 
-# =========================
-# Таблица лидеров игры
-# =========================
+    # Ищем лучший результат
+    # этого игрока в этой игре
 
-@app.route("/api/leaderboard/<game>")
-def game_leaderboard(game):
-    data = load_data()
+    old = conn.execute(
+        """
+        SELECT MAX(score) AS best
+        FROM scores
+        WHERE name = ?
+        AND game = ?
+        """,
+        (
+            name,
+            game
+        )
+    ).fetchone()
 
-    scores = [
-        score
-        for score in data["scores"]
-        if score["game"].lower() == game.lower()
-    ]
 
-    # Больший результат выше
-    scores.sort(
-        key=lambda x: x["score"],
-        reverse=True
-    )
+    best = old["best"]
+
+
+    # Если результата ещё нет
+    if best is None:
+
+        conn.execute(
+            """
+            INSERT INTO scores
+            (
+                name,
+                game,
+                score
+            )
+            VALUES (?, ?, ?)
+            """,
+            (
+                name,
+                game,
+                score
+            )
+        )
+
+
+    # Если новый рекорд лучше старого
+    elif score > best:
+
+        conn.execute(
+            """
+            INSERT INTO scores
+            (
+                name,
+                game,
+                score
+            )
+            VALUES (?, ?, ?)
+            """,
+            (
+                name,
+                game,
+                score
+            )
+        )
+
+
+    # Старый результат лучше
+    else:
+
+        conn.close()
+
+        return jsonify({
+            "ok": True,
+            "saved": False,
+            "best": best
+        })
+
+
+    conn.commit()
+    conn.close()
+
 
     return jsonify({
-        "game": game,
-        "leaderboard": scores[:20]
+        "ok": True,
+        "saved": True,
+        "best": score
     })
 
 
 # =========================
-# Общая таблица лидеров
+# ПРОВЕРКА СЕРВЕРА
 # =========================
 
-@app.route("/api/leaderboard")
-def leaderboard():
-    data = load_data()
-
-    scores = list(data["scores"])
-
-    scores.sort(
-        key=lambda x: x["score"],
-        reverse=True
-    )
+@app.route("/health")
+def health():
 
     return jsonify({
-        "leaderboard": scores[:50]
+        "status": "ok"
     })
 
 
 # =========================
-# 404
-# =========================
-
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({
-        "error": "Страница не найдена"
-    }), 404
-
-
-# =========================
-# Запуск
+# ЗАПУСК
 # =========================
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
 
-    print("=================================")
-    print("🎮 GameZone Backend")
-    print("🚀 Сервер запущен")
-    print(f"🌐 Порт: {port}")
-    print("=================================")
+    # Создаём базу данных
+    init_db()
 
+    # Для RelaxDev и других серверов
+    # слушаем все подключения
     app.run(
         host="0.0.0.0",
-        port=port,
-        debug=False
+        port=5000
     )
